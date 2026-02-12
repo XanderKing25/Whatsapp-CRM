@@ -427,14 +427,14 @@
                         </div>
                     </div>
                     <div>
-                        <label class="block text-gray-700 font-semibold mb-2">Filtro de Análisis</label>
-                        <select id="auditFilter"
+                        <label class="block text-gray-700 font-semibold mb-2">Filtro de Visualización</label>
+                        <select id="auditFilter" onchange="applyAuditFilters()"
                             class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white">
                             <option value="all">Todos (Clientes y Agentes)</option>
                             <option value="user" selected>Solo Clientes</option>
                             <option value="bot">Solo Agentes (Empleados)</option>
                         </select>
-                        <p class="text-sm text-gray-500 mt-1">Selecciona qué mensajes analizar.</p>
+                        <p class="text-sm text-gray-500 mt-1">Filtra los resultados analizados sin recargar.</p>
                     </div>
                     <div>
                         <label class="block text-gray-700 font-semibold mb-2">API Key</label>
@@ -474,8 +474,8 @@
                         <h3 class="text-gray-500 text-sm font-bold uppercase">Sentimiento Negativo</h3>
                         <p id="kpi-negative" class="text-3xl font-bold text-gray-800 mt-2">0</p>
                     </div>
-                    <div class="bg-white p-6 rounded-lg shadow-md border-t-4 border-yellow-500">
-                        <h3 class="text-gray-500 text-sm font-bold uppercase">Alertas de Grosería</h3>
+                    <div class="bg-white p-6 rounded-lg shadow-md border-t-4 border-orange-500">
+                        <h3 class="text-gray-500 text-sm font-bold uppercase">Lenguaje Ofensivo</h3>
                         <p id="kpi-rude" class="text-3xl font-bold text-gray-800 mt-2">0</p>
                     </div>
                     <div class="bg-white p-6 rounded-lg shadow-md border-t-4 border-blue-500">
@@ -495,16 +495,22 @@
                                 <tr>
                                     <th
                                         class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                        Mensaje</th>
+                                        Rol</th>
+                                    <th
+                                        class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                        Origen</th>
+                                    <th
+                                        class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                        Contenido del Mensaje</th>
                                     <th
                                         class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                                         Sentimiento</th>
                                     <th
                                         class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                        Grosería</th>
+                                        Ofensivo</th>
                                     <th
                                         class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                        Recomendación</th>
+                                        Acción Sugerida</th>
                                 </tr>
                             </thead>
                             <tbody id="auditTableBody" class="bg-white divide-y divide-gray-200">
@@ -835,6 +841,47 @@
                     }
                 }
             });
+        }
+
+        async function listAvailableModels(apiKey) {
+            try {
+                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+                if (!response.ok) {
+                    console.warn(`ListModels failed: ${response.status} ${response.statusText}`);
+                    return [];
+                }
+                const data = await response.json();
+                if (data.models) {
+                    // Filter for generateContent support AND specific allowed models
+                    const available = data.models
+                        .filter(m =>
+                            m.supportedGenerationMethods &&
+                            m.supportedGenerationMethods.includes("generateContent") &&
+                            !m.name.includes("research") &&
+                            !m.name.includes("computer-use") &&
+                            !m.name.includes("embedding")
+                        )
+                        .map(m => m.name.replace("models/", "")); // Strip prefix for use in SDK
+
+                    console.log("Available Models from API (Filtered):", available);
+
+                    // Prioritize specific models
+                    return available.sort((a, b) => {
+                        const score = (name) => {
+                            if (name.includes("1.5-flash")) return 4;
+                            if (name.includes("2.0-flash")) return 3;
+                            if (name.includes("1.5-pro")) return 2;
+                            if (name.includes("gemini-pro")) return 1; // Legacy
+                            return 0;
+                        };
+                        return score(b) - score(a);
+                    });
+                }
+                return [];
+            } catch (e) {
+                console.warn("Error listing models:", e);
+                return [];
+            }
         }
 
         // ==========================================
@@ -1518,40 +1565,58 @@
         // ==========================================
 
         function simulateIncomingMessage() {
-            const simulatedMessages = [
+            const simulatedScenarios = [
                 {
-                    name: 'Carlos Rodríguez',
-                    phone: '3001234567',
-                    message: '¡Hola! Me gustaría saber los precios de sus servicios'
+                    clientName: 'Carlos Rodríguez',
+                    clientPhone: '3001234567',
+                    conversation: [
+                        { sender: 'user', text: '¡Hola! Me gustaría saber los precios de sus servicios.' },
+                        { sender: 'bot', text: 'Hola Carlos. Nuestros planes inician desde $50 USD mensuales. ¿Te interesa el plan Básico o Pro?' },
+                        { sender: 'user', text: 'El Pro, por favor. ¿Qué incluye?' },
+                        { sender: 'bot', text: 'El Plan Pro incluye soporte 24/7 y análisis ilimitado. ¡Es nuestra mejor opción!' }
+                    ]
                 },
                 {
-                    name: 'Ana María López',
-                    phone: '3107654321',
-                    message: 'Buenos días, necesito información sobre sus productos'
+                    clientName: 'Ana María López',
+                    clientPhone: '3107654321',
+                    conversation: [
+                        { sender: 'user', text: 'Buenos días, necesito información sobre sus productos.' },
+                        { sender: 'bot', text: 'Claro Ana. Tenemos un catálogo completo en nuestra web. ¿Buscas algo específico?' },
+                        { sender: 'user', text: 'Busco zapatos deportivos.' },
+                        { sender: 'bot', text: 'Perfecto. Tenemos la nueva colección Nike y Adidas con 20% de descuento.' }
+                    ]
                 },
                 {
-                    name: 'Miguel Ángel Torres',
-                    phone: '3209876543',
-                    message: 'Tengo un problema con mi pedido, ¿pueden ayudarme?'
+                    clientName: 'Miguel Ángel Torres',
+                    clientPhone: '3209876543',
+                    conversation: [
+                        { sender: 'user', text: 'Llevo 3 horas esperando respuesta, son unos inútiles.' },
+                        { sender: 'bot', text: 'Hola Miguel. Lamento mucho la demora. Estamos verificando tu caso con prioridad.' },
+                        { sender: 'user', text: 'No me interesa su problema, quiero una solución YA.' },
+                        { sender: 'bot', text: 'Entiendo tu molestia. Un supervisor te contactará en los próximos 10 minutos.' }
+                    ]
                 },
                 {
-                    name: 'Laura Fernández',
-                    phone: '3156789012',
-                    message: '¡Gracias por su excelente servicio!'
+                    clientName: 'Laura Fernández',
+                    clientPhone: '3156789012',
+                    conversation: [
+                        { sender: 'user', text: '¡Gracias por su excelente servicio!' },
+                        { sender: 'bot', text: '¡Gracias a ti Laura! Fue un placer ayudarte.' }
+                    ]
                 }
             ];
 
-            const random = simulatedMessages[Math.floor(Math.random() * simulatedMessages.length)];
+            const scenario = simulatedScenarios[Math.floor(Math.random() * simulatedScenarios.length)];
 
             let clients = getClients();
-            let client = clients.find(c => c.phone === random.phone);
+            let client = clients.find(c => c.phone === scenario.clientPhone);
 
             if (!client) {
                 // Crear nuevo cliente
                 client = {
                     id: Date.now().toString(),
-                    name: random.name,
-                    phone: random.phone,
+                    name: scenario.clientName,
+                    phone: scenario.clientPhone,
                     status: 'nuevo',
                     agentId: null,
                     createdAt: new Date().toISOString()
@@ -1560,28 +1625,23 @@
                 saveClients(clients);
             }
 
-            // Crear nueva sesión
+            // Crear nueva sesión con historial completo
             let sessions = getSessions();
             const newSession = {
-                id: Date.now().toString(),
+                id: Date.now().toString() + Math.random().toString().slice(2, 5),
                 clientId: client.id,
                 startedAt: new Date().toISOString(),
-                status: 'active',
-                messages: [
-                    {
-                        sender: 'user',
-                        text: random.message,
-                        timestamp: new Date().toISOString()
-                    }
-                ]
+                status: 'cerrado',
+                messages: scenario.conversation.map(msg => ({
+                    sender: msg.sender,
+                    text: msg.text,
+                    timestamp: new Date().toISOString()
+                }))
             };
             sessions.push(newSession);
             saveSessions(sessions);
 
-            // Procesar con IA
-            processMessageWithAI(random.message, newSession.id);
-
-            showNotification(`Nuevo mensaje de ${random.name}`, 'success');
+            showNotification(`Simulación: Conversación importada con ${scenario.clientName}`, 'success');
             updateDashboard();
 
             if (currentView === 'clientes') {
@@ -1622,6 +1682,7 @@
                     const colName = Object.keys(firstRow).find(k => ['cliente', 'client', 'usuario', 'user', 'nombre', 'name'].includes(k.toLowerCase()));
                     const colPhone = Object.keys(firstRow).find(k => ['telefono', 'phone', 'celular', 'tel'].includes(k.toLowerCase()));
                     const colAgent = Object.keys(firstRow).find(k => ['agente', 'agent', 'asesor'].includes(k.toLowerCase()));
+                    const colRole = Object.keys(firstRow).find(k => ['rol', 'role', 'sender', 'tipo', 'remitente'].includes(k.toLowerCase()));
 
                     data.forEach(row => {
                         const msgText = colMsg ? row[colMsg] : null;
@@ -1646,11 +1707,10 @@
                             addedClients++;
                         }
 
-                        // 2. Link/Create Agent (ALWAYS update, even if client exists)
+                        // 2. Link/Create Agent
                         if (agentName) {
                             let agent = agents.find(a => a.name.toLowerCase() === agentName.toLowerCase());
                             if (!agent) {
-                                // Create new agent
                                 agent = {
                                     id: Date.now().toString() + Math.random().toString().slice(2, 5),
                                     name: agentName,
@@ -1660,19 +1720,30 @@
                                 agents.push(agent);
                                 saveAgents(agents);
                             }
-                            // Update client link if missing or different
                             if (client.agentId !== agent.id) {
                                 client.agentId = agent.id;
                             }
                         }
 
-                        // 3. Determine Sender
+                        // 3. Determine Sender (Improved Logic)
                         let senderIdx = 'user';
-                        const colRole = Object.keys(firstRow).find(k => ['rol', 'role', 'sender', 'tipo', 'remitente'].includes(k.toLowerCase()));
 
+                        // A) Explicit Column
                         if (colRole && row[colRole]) {
                             const val = row[colRole].toLowerCase();
                             if (val.includes('agent') || val.includes('asesor') || val.includes('bot') || val.includes('soporte') || val.includes('empleado')) {
+                                senderIdx = 'bot';
+                            }
+                        }
+                        // B) Keyword Heuristics (Fallback if no role column)
+                        else {
+                            const lowerMsg = msgText.toLowerCase();
+                            const agentKeywords = [
+                                "gracias por contactarnos", "en qué puedo ayudarte", "soy el agente",
+                                "el precio es", "nuestros horarios son", "verificando su cuenta",
+                                "aguarde un momento", "le informamos que", "no me interesa su problema" // Based on screenshot context often being rude agents too
+                            ];
+                            if (agentKeywords.some(kw => lowerMsg.includes(kw))) {
                                 senderIdx = 'bot';
                             }
                         }
@@ -1699,7 +1770,6 @@
                     saveSessions(sessions);
                     updateDashboard();
 
-                    // Reset input
                     input.value = '';
                     showNotification(`Importación: ${addedClients} clientes, ${addedSessions} mensajes.`, 'success');
                 },
@@ -1734,7 +1804,7 @@
         async function startAudit() {
             const apiKeyInput = document.getElementById('geminiKey');
             const apiKey = apiKeyInput.value.trim();
-            const filterRole = document.getElementById('auditFilter').value;
+            // The filter is applied AFTER analysis now
 
             // 1. Get Data from Global Store
             const sessions = getSessions();
@@ -1746,7 +1816,7 @@
                 return;
             }
 
-            // Extract User Messages for Analysis with Context
+            // Extract ALL Messages for Analysis with Context
             let messagesToAnalyze = [];
 
             sessions.forEach(session => {
@@ -1757,43 +1827,36 @@
                 const agentName = agent ? agent.name : 'Sin Asignar';
 
                 session.messages.forEach(msg => {
-                    // Filter Logic
-                    if (filterRole === 'all' || msg.sender === filterRole) {
-                        messagesToAnalyze.push({
-                            text: msg.text,
-                            role: msg.sender === 'user' ? 'Cliente' : 'Agente',
-                            clientName: clientName,
-                            agentName: agentName,
-                            senderType: msg.sender
-                        });
-                    }
+                    // Analyze EVERYTHING first
+                    messagesToAnalyze.push({
+                        text: msg.text,
+                        role: msg.sender === 'user' ? 'Cliente' : 'Agente',
+                        clientName: clientName,
+                        agentName: agentName,
+                        senderType: msg.sender
+                    });
                 });
             });
 
             if (messagesToAnalyze.length === 0) {
-                alert('No se encontraron mensajes con el filtro seleccionado.');
+                alert('No se encontraron mensajes para analizar.');
                 return;
             }
 
             // UI Reset
             document.getElementById('auditProgressContainer').classList.remove('hidden');
             document.getElementById('auditResults').classList.add('hidden');
-            document.getElementById('auditStatus').textContent = 'Preparando datos...';
+            document.getElementById('auditStatus').textContent = 'Preparando análisis completo...';
             document.getElementById('auditProgressBar').style.width = '5%';
 
             // Start Analysis
-            document.getElementById('auditStatus').textContent = 'Iniciando análisis...';
             await runAnalysis(messagesToAnalyze, apiKey);
         }
 
         async function runAnalysis(messagesData, apiKey) {
-            auditResultsData = [];
+            auditResultsData = []; // Clear previous results
             let processedCount = 0;
             const batchSize = 5;
-
-            // KPI Counters
-            let negativeCount = 0;
-            let rudeCount = 0;
 
             for (let i = 0; i < messagesData.length; i += batchSize) {
                 const batch = messagesData.slice(i, i + batchSize);
@@ -1801,14 +1864,12 @@
 
                 if (apiKey) {
                     try {
-                        // We map back to string for simple analysis but keep objects for results
                         const cleanBatch = batch.map(m => `[${m.role}] ${m.text}`);
                         const aiResults = await analyzeWithGemini(cleanBatch, apiKey);
 
-                        // Merge AI results with metadata
                         batchResults = aiResults.map((res, idx) => ({
                             ...res,
-                            ...batch[idx] // Restore metadata
+                            ...batch[idx]
                         }));
 
                     } catch (e) {
@@ -1827,16 +1888,9 @@
 
                 auditResultsData.push(...batchResults);
 
-                // Update stats
-                batchResults.forEach(res => {
-                    if (String(res.sentiment).includes('Negativo')) negativeCount++;
-                    if (String(res.isRude) === 'Si') rudeCount++;
-                });
-
                 processedCount += batch.length;
                 const percent = Math.min(100, Math.round((processedCount / messagesData.length) * 100));
 
-                // Update UI Progress
                 document.getElementById('auditProgressBar').style.width = `${percent}%`;
                 document.getElementById('auditPercent').textContent = `${percent}%`;
                 document.getElementById('auditStatus').textContent = `Analizando ${processedCount} de ${messagesData.length}...`;
@@ -1844,15 +1898,35 @@
                 await new Promise(r => setTimeout(r, 100));
             }
 
-            // Finish
-            document.getElementById('auditStatus').textContent = 'Completado';
-            renderAuditResults(auditResultsData, negativeCount, rudeCount, messagesData.length);
+            document.getElementById('auditStatus').textContent = 'Análisis Completado';
+            applyAuditFilters(); // Filter AFTER analysis
+        }
+
+        function applyAuditFilters() {
+            const filterRole = document.getElementById('auditFilter').value;
+
+            // Filter local results
+            const filteredResults = auditResultsData.filter(row => {
+                if (filterRole === 'all') return true;
+                return row.senderType === filterRole;
+            });
+
+            // Calculate KPIs on FILTERED data
+            let negativeCount = 0;
+            let offensiveCount = 0;
+
+            filteredResults.forEach(res => {
+                if (String(res.sentiment).includes('Negativo')) negativeCount++;
+                if (String(res.isRude) === 'Si') offensiveCount++;
+            });
+
+            renderAuditResults(filteredResults, negativeCount, offensiveCount, filteredResults.length);
         }
 
         function analyzeFallback(text) {
             const lower = String(text).toLowerCase();
 
-            const malasPalabras = ["inutil", "inútil", "estupido", "estúpido", "mierda", "basura", "lento", "pésimo", "horrible", "odio", "robo", "estafa", "molesto", "enojado"];
+            const malasPalabras = ["inutil", "inútil", "estupido", "estúpido", "mierda", "basura", "lento", "pésimo", "horrible", "odio", "robo", "estafa", "molesto", "enojado", "callese", "cállese", "idiota"];
             const urgente = ["urgente", "emergencia", "ahora", "inmediato", "denuncia"];
             const buenas = ["gracias", "excelente", "buen", "amable", "rapido", "solucion", "feliz"];
 
@@ -1877,31 +1951,7 @@
             return { message: text, sentiment, isRude, recommendation };
         }
 
-        async function listAvailableModels(apiKey) {
-            try {
-                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
-                if (!response.ok) return [];
-                const data = await response.json();
-                if (data.models) {
-                    return data.models
-                        .filter(m => m.supportedGenerationMethods && m.supportedGenerationMethods.includes("generateContent"))
-                        .map(m => m.name.replace("models/", ""))
-                        .sort((a, b) => {
-                            const score = (name) => {
-                                if (name.includes("1.5-flash")) return 3;
-                                if (name.includes("1.5-pro")) return 2;
-                                if (name.includes("gemini-pro")) return 1;
-                                return 0;
-                            };
-                            return score(b) - score(a);
-                        });
-                }
-                return [];
-            } catch (e) {
-                console.warn("Error listing models:", e);
-                return [];
-            }
-        }
+        // ... (listAvailableModels remains same) ...
 
         async function analyzeWithGemini(messages, apiKey) {
             try {
@@ -1911,18 +1961,24 @@
                 }
 
                 // 1. Get Available Models Dynamically
-                let validModels = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"];
-                const discovered = await listAvailableModels(apiKey);
-                if (discovered.length > 0) validModels = discovered;
+                let validModels = ["gemini-1.5-flash", "gemini-2.0-flash-exp", "gemini-1.5-pro"];
+                try {
+                    const discovered = await listAvailableModels(apiKey);
+                    // Use discovered models directly as they are already sorted by preference in listAvailableModels
+                    // and filtered for forbidden models
+                    if (discovered.length > 0) {
+                        validModels = discovered;
+                    }
+                } catch (e) { console.warn("Model discovery failed", e); }
 
                 const genAI = new window.GoogleGenerativeAI(apiKey);
                 let response = null;
                 let error = null;
 
                 let prompt = `
-                Analiza la siguiente lista de mensajes de soporte.
+                Analiza la siguiente lista de mensajes de soporte técnico y atención al cliente.
                 Para CADA mensaje, responde en una nueva línea con este formato exacto:
-                SENTIMIENTO | GROSERIA (Si/No) | RECOMENDACIÓN (Max 5 palabras)
+                SENTIMIENTO | LENGUAJE_OFENSIVO (Si/No) | ACCIÓN_SUGERIDA (Max 5 palabras)
                 
                 Si un mensaje está vacío, responde: Neutro | No | N/A
                 
@@ -1932,13 +1988,11 @@
                     prompt += `\n${idx + 1}. ${m}`;
                 });
 
-                // Auto-discovery / Fallback Loop
                 for (const modelName of validModels) {
                     try {
                         const m = genAI.getGenerativeModel({ model: modelName });
                         const result = await m.generateContent(prompt);
                         response = await result.response;
-                        console.log(`Success with model: ${modelName}`);
                         break;
                     } catch (e) {
                         console.warn(`Failed with model ${modelName}:`, e);
@@ -1946,9 +2000,7 @@
                     }
                 }
 
-                if (!response) {
-                    throw error || new Error("All models failed");
-                }
+                if (!response) throw error || new Error("All models failed");
 
                 const text = response.text();
                 const lines = text.trim().split('\n');
@@ -1972,23 +2024,25 @@
                 return results;
 
             } catch (e) {
-                console.error("Gemini API Error All Models", e);
+                console.error("Gemini API Error", e);
                 return messages.map(m => analyzeFallback(m));
             }
         }
 
-        function renderAuditResults(results, countNeg, countRude, countTotal) {
+        function renderAuditResults(results, countNeg, countOffensive, countTotal) {
             document.getElementById('auditResults').classList.remove('hidden');
-            // Chatbot is now in its own view, no need to toggle visibility here
 
             document.getElementById('kpi-negative').textContent = countNeg;
-            document.getElementById('kpi-rude').textContent = countRude;
+            document.getElementById('kpi-rude').textContent = countOffensive;
             document.getElementById('kpi-total').textContent = countTotal;
+
+            // Update Headers in UI (Only logic here, HTML headers updated separately or via replace)
+            // But we will update the HTML static part in a separate step or assume it's done. 
+            // Better to update the static HTML for headers in another step.
 
             const tbody = document.getElementById('auditTableBody');
             tbody.innerHTML = '';
 
-            // Show all results (limit to last 100 for DOM performance if needed, currently showing all for completeness)
             results.slice().reverse().forEach(row => {
                 const tr = document.createElement('tr');
                 const roleClass = row.senderType === 'bot' ? 'text-purple-600 bg-purple-50' : 'text-gray-900';
@@ -1997,15 +2051,17 @@
                     <td class="px-6 py-4 whitespace-nowrap text-sm font-medium ${roleClass}">${row.role}</td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                         <div class="font-medium text-gray-900">${row.clientName}</div>
-                        <div class="text-xs text-gray-400">Agente: ${row.agentName}</div>
+                        <div class="text-xs text-gray-400">${row.agentName !== 'Sin Asignar' ? row.agentName : '-'}</div>
                     </td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 truncate max-w-xs" title="${row.message}">${row.message}</td>
+                    <td class="px-6 py-4 text-sm text-gray-900 max-w-xs truncate" title="${row.message}">${row.message}</td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                         <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${String(row.sentiment).includes('Negativo') ? 'bg-red-100 text-red-800' : String(row.sentiment).includes('Positivo') ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}">
                             ${row.sentiment}
                         </span>
                     </td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${row.isRude}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">
+                        ${row.isRude === 'Si' ? '<span class="text-red-600 font-bold">⚠️ SÍ</span>' : '<span class="text-green-600">No</span>'}
+                    </td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${row.recommendation}</td>
                 `;
                 tbody.appendChild(tr);
@@ -2119,17 +2175,24 @@
                     window.GoogleGenerativeAI = module.GoogleGenerativeAI;
                 }
 
-                // Dynamic Model Discovery
-                let validModels = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"];
-                try {
-                    const discovered = await listAvailableModels(apiKey);
-                    if (discovered.length > 0) validModels = discovered;
-                } catch (e) { console.warn("Model discovery failed, using defaults"); }
-
                 const genAI = new window.GoogleGenerativeAI(apiKey);
-                let responseText = "Error: No se pudo generar respuesta con los modelos disponibles.";
+                let responseText = null;
+                let lastError = null;
+                let triedModels = [];
 
                 // Try models in order
+                const validModels = ["gemini-2.0-flash-exp", "gemini-1.5-flash", "gemini-1.5-pro"];
+                // Add discovered
+                try {
+                    const discovered = await listAvailableModels(apiKey);
+                    if (discovered.length > 0) {
+                        for (const m of discovered) {
+                            if (!validModels.includes(m)) validModels.unshift(m);
+                        }
+                    }
+                } catch (e) { console.warn("Model discovery failed", e); }
+
+
                 for (const modelName of validModels) {
                     try {
                         const model = genAI.getGenerativeModel({ model: modelName });
@@ -2138,14 +2201,21 @@
                         break; // Success
                     } catch (e) {
                         console.warn(`Chat failed with ${modelName}`, e);
+                        lastError = e;
+                        triedModels.push(modelName);
                         continue;
                     }
                 }
 
-                return responseText;
+                if (responseText) {
+                    return responseText;
+                } else {
+                    const errorMsg = lastError ? (lastError.message || JSON.stringify(lastError)) : "Modelos no disponibles";
+                    return `Error: No se pudo generar respuesta (${triedModels.join(', ')} fallaron). Último error: ${errorMsg}`;
+                }
 
             } catch (e) {
-                return "Error al consultar Gemini: " + e.message;
+                return "Error crítico al consultar Gemini: " + e.message;
             }
         }
 
@@ -2161,12 +2231,12 @@
                 return `Analicé un total de **${total} mensajes**.`;
             } else if (lower.includes('negativo') || lower.includes('mal')) {
                 return `Detecté **${negatives} mensajes** con sentimiento negativo.`;
-            } else if (lower.includes('groser') || lower.includes('alerta')) {
-                return `Hay **${rude} alertas** de grosería o trato inadecuado.`;
+            } else if (lower.includes('groser') || lower.includes('alerta') || lower.includes('ofensiv')) {
+                return `Se detectaron **${rude} casos** de lenguaje ofensivo o inapropiado.`;
             } else if (lower.includes('peor') || lower.includes('mejor')) {
-                return "En modo offline no puedo identificar agentes específicos, solo contar métricas generales.";
+                return "En modo offline solo tengo métricas generales. Usa tu API Key para detalles específicos.";
             } else {
-                return "No tengo respuesta para eso en modo offline. Intenta preguntar por 'total', 'negativos' o 'groserías'.";
+                return "No tengo respuesta para eso en modo offline. Pregunta por 'total', 'negativos' o 'ofensivos'.";
             }
         }
 
